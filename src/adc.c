@@ -3,8 +3,6 @@
 
 void adc_init( void )
 {
-    //adcConfig(ADC_ENABLE);
-
     // Copié lo de abajo de sapi_adc, para poder cambiar la resolución
 
     ADC_CLOCK_SETUP_T ADCSetup = {

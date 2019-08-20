@@ -9,22 +9,58 @@
 
 
 // DEBUG
+// Esta constante es para aumentar el intervalo de las tareas, en caso de
+// querer que se disparen mas lento para debugging.
 #define DBG_PERIOD_MULTIPLIER    1
 
 
-/* Memoria estatica de la aplicacion, para no ponerla en el stack */
+/// Memoria estatica de la aplicacion, para no ponerla en el stack.
 uint8_t buffer_queue_mem[APP_DATA_BUF_SIZE * APP_DATA_BUF_NMBR];
 
 
+/**
+ * Tarea principal, espera que haya muestras del ADC y las envia por la UART,
+ * luego espera la respuesta por UART o enciende el LED de error.
+ */
 void vTaskApp( void *pParam );
+
+/**
+ * Tarea del ADC, simplemente toma una muestra por iteracion y la coloca en un
+ * buffer.  En caso de que se cambie el periodo de muestreo aqui adentro se
+ * cambia el delay entre casa iteracion.
+ * Se comunica con vTaskApp a traves de un buffer_queue.
+ */
 void vTaskADC( void *pParam );
+
+/**
+ * Trea de recepcion UART.  Esta escuchando la UART en caso de recibir algun
+ * mensaje, para simplificar las cosas aceptamos cualquier mensaje como
+ * Acknowledge de que todo esta bien y disparamos el semaforo que le notifica
+ * a vTaskApp que los datos se enviaron correctamente.
+ */
 void vTaskUART( void *pParam );
+
+/**
+ * Actualiza el estado de las teclas para eliminar los rebotes.  En caso de
+ * algun evento indica con un semaforo que hay una nueva configuracion por
+ * aplicar.  Por ahora lo unico que hace es cambiar la frecuencia de muestreo.
+ */
 void vTaskButtons( void *pParam );
+
+/**
+ * Solo se dispara cuando hubo un error de recepcion UART y queda encendida por
+ * APP_ERROR_ONTIME.  La tarea queda trabada indefinidamente mientras no se de
+ * esa condicion.
+ */
 void vTaskError( void *pParam );
 
 
 void app_update( app_type* app )
 {
+	// Pedimos un buffer lleno con muestras del ADC.
+	// El timeout esta por si las dudas, si las cosas andan bien y no le paso
+	// nada raro a la tarea del ADC siempre vamos a tener datos para procesar.
+
     const TickType_t timeout = pdMS_TO_TICKS(1000UL * DBG_PERIOD_MULTIPLIER);
     uint8_t* buf = buffer_queue_get_inuse(&app->data_queue, timeout);
 
@@ -35,10 +71,7 @@ void app_update( app_type* app )
         buffer_queue_return(&app->data_queue, buf);
 
         const TickType_t uart_timeout = pdMS_TO_TICKS(APP_UART_TIMEOUT);
-        if (xSemaphoreTake(app->semaphore_reply, uart_timeout) == pdTRUE)
-        {
-        }
-        else
+        if (xSemaphoreTake(app->semaphore_reply, uart_timeout) != pdTRUE)
         {
             // Timeout
             xSemaphoreGive(app->semaphore_error);
@@ -94,10 +127,9 @@ void adc_update( app_type* app )
 void uart_update( app_type* app )
 {
     uint8_t data;
-    const TickType_t timeout = pdMS_TO_TICKS(1000UL * DBG_PERIOD_MULTIPLIER);
-
     if (uart_read(&data))
     {
+		// Indicamos a vTaskApp que esta todo bien.
         xSemaphoreGive(app->semaphore_reply);
     }
 }
@@ -109,6 +141,7 @@ void buttons_update( app_type* app )
     debouncer_update(&app->button_up   );
     debouncer_update(&app->button_down );
 
+	// Bajar la frecuencia de muestreo.
     if (debouncer_is_edge(&app->button_left))
     {
         if (debouncer_is_hi(&app->button_left))
@@ -126,6 +159,7 @@ void buttons_update( app_type* app )
         }
     }
 
+	// Aumentar la frecuencia de muestreo.
     if (debouncer_is_edge(&app->button_right))
     {
         if (debouncer_is_hi(&app->button_right))
@@ -148,17 +182,21 @@ void app_init( app_type* app )
 {
     Board_Init();
     
+	// Periodo de muestreo al maximo.
     app->sample_period = 0;
 
+	// Inicializamos los semaforos.
     app->semaphore_config = xSemaphoreCreateBinary();
     app->semaphore_error  = xSemaphoreCreateBinary();
     app->semaphore_reply  = xSemaphoreCreateBinary();
 
+	// Inicializamos la lista de buffers.
     buffer_queue_init( &app->data_queue,
                        buffer_queue_mem,
                        APP_DATA_BUF_SIZE,
                        APP_DATA_BUF_NMBR );
 
+	// Iniciamos todas las tareas, estan ordenadas por prioridad.
     xTaskCreate( vTaskADC,
                  (const char*) "Task ADC",
                  configMINIMAL_STACK_SIZE,
@@ -177,21 +215,21 @@ void app_init( app_type* app )
                  (const char*) "Task UART",
                  configMINIMAL_STACK_SIZE,
                  app,
-                 tskIDLE_PRIORITY+3,
+                 tskIDLE_PRIORITY+2,
                  NULL );
 
     xTaskCreate( vTaskButtons,
                  (const char*) "Task Buttons",
                  configMINIMAL_STACK_SIZE,
                  app,
-                 tskIDLE_PRIORITY+4,
+                 tskIDLE_PRIORITY+3,
                  NULL );
 
     xTaskCreate( vTaskError,
                  (const char*) "Task Error",
                  configMINIMAL_STACK_SIZE,
                  app,
-                 tskIDLE_PRIORITY+5,
+                 tskIDLE_PRIORITY+3,
                  NULL );
 }
 
@@ -199,14 +237,10 @@ void app_init( app_type* app )
 void vTaskApp( void *pParam )
 {
     app_type* pApp = pParam;
-    const TickType_t xTaskDelay = pdMS_TO_TICKS(1UL * DBG_PERIOD_MULTIPLIER);
-    TickType_t xLastWakeTime = xTaskGetTickCount();
     
     while (1)
     {
-        app_update(pApp);
-
-        //vTaskDelayUntil(&xLastWakeTime, xTaskDelay);
+        app_update(pApp);  // Adentro espera por un buffer con datos.
     }
 }
 

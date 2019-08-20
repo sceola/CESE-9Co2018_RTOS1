@@ -17,7 +17,18 @@ extern "C" {
 #endif
 
 
+/**
+ * Inicializa el ADC con la siguiente configuracion:
+ *     * Tasa de muestreo maxima, es mayor que las una muestra por tick de 1ms
+ *       que vamos a usar.
+ *     * 8 bits de ancho de palabra.
+ *     * Todos los canales deshabilitados.
+ */
 void adc_init( void );
+
+/**
+ * Habilita el canal especificado y lee una muestra.
+ */
 uint8_t adc_read( int chn );
 
 
